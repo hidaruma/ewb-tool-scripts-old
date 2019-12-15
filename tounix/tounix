@@ -1,0 +1,42 @@
+#!/usr/bin/perl
+# テキストファイルの漢字コードと改行コードををUNIX形式(LF,EUC)に変換
+# 使用法: tounix ファイル名(ワイルドカードOK)
+
+$KANJI="-e";
+$CR="-u -e";
+$TMP="/tmp";
+
+if ($#ARGV == -1 || $ARGV[0] eq "-help") {
+	print $0," file ...\n";
+	exit;
+}
+
+foreach $i (@ARGV) {
+	if (-f $i) {
+		if (-w $i) {
+			$tmpfile = sprintf("%s/%d.cr-nkf",$TMP,$$);
+# EPSファイルの場合は漢字コード変換しない
+			$com = sprintf("head -c 30 \'%s\' |",$i);
+			open(IN,$com);
+			$str = <IN>;
+			close(IN);
+			if ($str =~ /^%!PS-Adobe-.*EPSF-.*/) {
+				$com = sprintf("cp -f \'%s\' \'%s\'",$i,$tmpfile);
+			}
+			else {
+				$com = sprintf("nkf $KANJI \'%s\' > \'%s\'",$i,$tmpfile);
+			}
+			system($com);
+# 改行コード変換
+			$com = sprintf("crconv %s -o \'%s\' \'%s\'",$CR,$i,$tmpfile);
+			system($com);
+			unlink $tmpfile;
+		}
+		else {
+			print $i," : file not writable\n";
+		}
+	}
+	else {
+		print $i," : file not found\n";
+	}
+}
