@@ -1,0 +1,46 @@
+#!/bin/sh
+#
+# 欧文フォントAFMからTFMを作成し、TEXMF/fontsディレクトリにインストール。
+# EWB関連ファイルをアップデート。
+# efontadd <PSフォント名> <AFM名> <ファミリ名> <ウエイト> <シェイプ>
+#
+texmfdir=/usr/local/ewb/3.3/share/texmf ; export texmfdir
+ewbdatadir=/usr/local/ewb/3.3 ; export ewbdatadir
+tfmdir=$texmfdir/fonts/tfm/psalpha ; export tfmdir
+dvipsdir=$texmfdir/dvips/base ; export dvipsdir
+ewblib=$ewbdatadir/ewbmacros/lib ; export ewblib
+
+if (test -z "$5") then
+	echo "efontadd : 欧文フォント追加"
+	echo "efontadd <PSフォント名> <AFM名> <ファミリ名> <ウエイト> <シェイプ>"
+	echo " AFMファイルは必ず拡張子が.afmで、AFM名には拡張子を付けずに記述"
+	echo " ファミリ名は tmr のように3～4文字程度"
+	echo " ウエイトは l,r,m,b のように太さを表す文字"
+	echo " シェイプは it,sl,sc のように変形を表す文字。変形なしは n を記述"
+	echo ""
+	exit
+fi
+
+echo "TFM作成、TEXMF/fontsディレクトリにコピー中"
+afm2tfm $2.afm $2.tfm
+test -d $tfmdir/misc || mkdir $tfmdir/misc
+mv $2.tfm $tfmdir/misc
+
+echo "フォント情報記述ファイルに追加中"
+echo "$2	$1" >> $dvipsdir/psalpha.map
+echo "0  OT1/$3/$4/$5	$2	$1" >> $ewblib/fonts.lst
+
+# 欧文fdファイル追加
+if test -f $ewblib/ps/ot1$3.fd ; then \
+	egrep "[^\\endinput]" $ewblib/ps/ot1$3.fd > /tmp/ot1$3.fd$$ ; \
+else \
+	echo "\\ProvidesFile{OT1$3.fd}" > /tmp/ot1$3.fd$$ ; \
+	echo "	[PostScript alphabet font definitions]" >> /tmp/ot1$3.fd$$ ; \
+	echo "\\DeclareFontFamily{OT1}{$3}{}" >> /tmp/ot1$3.fd$$ ; \
+fi
+echo "\\DeclareFontShape{OT1}{$3}{$4}{$5}{ <-> $1 }{}" >> /tmp/ot1$3.fd$$
+echo "\\endinput" >> /tmp/ot1$3.fd$$
+mv -f /tmp/ot1$3.fd$$ $ewblib/ps/ot1$3.fd
+
+echo "TEXMF/ls-R作成中"
+mktexlsr
