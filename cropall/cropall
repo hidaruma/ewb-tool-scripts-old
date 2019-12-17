@@ -1,0 +1,129 @@
+#!/usr/bin/perl
+
+unless (scalar(@ARGV)) {
+  &Usage();
+  exit;
+}
+
+$EWB2LATEXCLS = $ARGV[0];
+unless ( -f $EWB2LATEXCLS ) {
+  print "No file: $EWB2LATEXCLS\n";
+  exit 11;
+}
+$TARGETPS = $ARGV[1];
+unless ( -f $TARGETPS ) {
+  print "No file: $TARGETPS\n";
+  exit 11;
+}
+
+open EWB2LATEXCLS;
+while(<EWB2LATEXCLS>) {
+  s/\%.*//;
+  /\{\\special\{papersize\=(.*),(.*)\}\}/ && do {
+    $yousix = &ToBP($1);
+    $yousiy = &ToBP($2);
+    last;
+  };
+}
+close EWB2LATEXCLS;
+unless ($yousix && $yousiy) {
+  print "Irregal Paper Size!\n";
+  exit 11;
+}
+$yousix = $yousix - &ToBP("50mm");
+$yousiy = $yousiy - &ToBP("50mm");
+
+open TARGETPS;
+while(<TARGETPS>) {
+  /^\%\%BoundingBox\: (.*) (.*) (.*) (.*)/ && do {
+    $psxll = $1;
+    $psyll = $2;
+    $psxur = $3;
+    $psyur = $4;
+    ++$flagBaoudingBox;
+    last;
+  };
+}
+close TARGETPS;
+unless ($flagBaoudingBox) {
+  print "No BoundingBox on $TARGETPS!\n";
+  exit 11;
+}
+
+$cropxll = 72;
+$cropxur = 72 + $yousix;
+$cropyur = $psyur - 72;
+$cropyll = $cropyur - $yousiy;
+
+# for debug
+#print   $yousix . " " . $yousiy . "\n";
+#print   $psxll . " " . $psyll . " " . $psxur . " " .  $psyur . "\n";
+#print   $cropxll . " " . $cropyll . " " . $cropxur . " " .  $cropyur . "\n";
+
+open TARGETPS, ">>$TARGETPS";
+print TARGETPS <<EOF;
+% Crop all pages
+[       /CropBox [$cropxll $cropyll $cropxur $cropyur]
+        /PAGES
+pdfmark
+EOF
+close TARGETPS;
+
+exit;
+
+
+sub ToBP() {
+  local($x) = @_;
+
+  if ($x =~ /(.*)pt/) {
+    return ($1 / 72.27 * 72);
+  }
+  elsif ($x =~ /(.*)pc/) {
+    return ($1 * 12 / 72.27 * 72);
+  }
+  elsif ($x =~ /(.*)in/) {
+    return ($1 * 72);
+  }
+  elsif ($x =~ /(.*)bp/) {
+    return $1;
+  }
+  elsif ($x =~ /(.*)cm/) {
+    return ($1 / 2.54 * 72);
+  }
+  elsif ($x =~ /(.*)mm/) {
+    return ($1 / 25.4 * 72);
+  }
+  elsif ($x =~ /(.*)dd/) {
+    return ($1 * 1157 / 1238 / 72.27 * 72);
+  }
+  elsif ($x =~ /(.*)cc/) {
+    return ($1 / 12 * 1157 / 1238 / 72.27 * 72);
+  }
+  elsif ($x =~ /(.*)sp/) {
+    return ($1 / 65536 / 72.27 * 72);
+  }
+  print "Unknown dimention: $x\n";
+}
+
+sub Usage() {
+  print <<EOF;
+
+cropall - PS ファイルにEWBで指定された用紙サイズのPDFに自動的に切り出す指定を入れる
+                                                           1999 by H.Togashi
+
+ Usage: cropall style_file target_ps
+
+   style_file : 通常は ewb2latex.cls。
+
+		\\def\\EWB\@begindvi\{\\special\{papersize=232.00mm,284.00mm\}\}
+
+	の記述で用紙サイズを指定しているメインのスタイルを指定する。
+
+   target_ps : PDF に変換する PS ファイル。
+
+ Example:
+
+     cropall ../ewb2latex.cls ../Targets/ALL.PS
+
+EOF
+}
