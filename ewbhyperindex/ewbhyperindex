@@ -1,0 +1,16 @@
+#!/usr/bin/perl
+
+$lastdelim = 0;
+while(<>) {
+  chop;
+  ($lastdelim) && do {
+    s/^\s+([0-9ivxcdmIVXCDM]+)/\1\}/;
+    $lastdelim = 0;
+  };
+  s/(\\delim[nir]+) ([0-9ivxcdmIVXCDM]+)/\1 \\ewbhyperpage\{\2\}/g;
+  /\\delim[nir]+ *$/ && do {
+    ++$lastdelim;
+    $_ .= "\\ewbhyperpage\{\%";
+  };
+  print "$_\n";
+}
