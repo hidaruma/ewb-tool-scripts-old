@@ -1,0 +1,266 @@
+#!/usr/bin/perl
+#================================================================================
+#
+# settopdf - dvips -z の出力の PDF リンクのスタイルを変更し、
+#            しおり、書籍情報を付加する。 
+#
+#                                         (C) 2001 ASCII H.Togashi
+#
+#================================================================================
+
+use strict;
+use Getopt::Std;
+use FileHandle;
+use vars qw(
+	    $JAVA
+	    $MKPDFMARKCLASSDIR
+	    $outputfile
+	    $red
+	    $green
+	    $blue
+	    $hcorner
+	    $vcorner
+	    $width
+	    $dottedlength
+	    $dottedspace
+	    $dotted
+	    $opt_d
+	    $opt_h
+	    $opt_i
+	    $opt_t
+	    $opt_s
+	    $opt_o
+	    $opt_t
+	    $opt_n
+	    );
+
+# Java 実行環境の指定
+$JAVA = "/usr/local/jdk1.1.8/bin/java";
+$MKPDFMARKCLASSDIR = "/usr/local/ewb/3.3/java/mkpdfmark";
+# リンクスタイルのデフォルト
+$red = 0;
+$green = 0;
+$blue = 1;
+$hcorner = 1;
+$vcorner = 1;
+$width = 0;
+$dottedlength = 3;
+$dottedspace = 3;
+$dotted = "false";
+
+exit(main());
+
+#--------------------------------------------------------------------------------
+#
+# functions
+#
+
+#
+# main() : メイン
+#
+sub main {
+  GetOptions();			# オプションを取得し、
+  Exec() unless ($opt_d);	# 実行して、
+  return 0;			# 終り。
+}
+
+#
+# GetOptions() : オプションを解釈
+#
+sub GetOptions {
+  # オプションを取得し、ヘルプか不正なオプションだったら使用法を表示して終了。
+  if ( !(getopts('dhni:o:s:t:')) or # オプション解釈中にエラーになるか、
+       ($opt_h) or		# -h が指定されているか、
+       !($opt_i) or		# -i が指定されていないか、
+       !(@ARGV) ) {		# 引数が残っていない場合は、
+    Usage();			# 使用法を表示して、
+    exit 1;			# 異常終了。
+  }
+
+  # -i オプションで指定されたファイルがない場合は、異常終了。
+  unless (-f $opt_i) {
+    print STDERR "No such file : $opt_i\n";
+    exit 11;
+  }
+  print "Use Info : $opt_i\n" if ($opt_d);
+
+  # -t オプションが指定されていた場合は、
+  if ($opt_t) {
+    # -t オプションで指定されたファイルがなければ、異常終了。
+    unless (-f $opt_t) {
+      print STDERR "No such file : $opt_t\n";
+      exit 11;
+    }
+    print "Use Siori : $opt_t\n" if ($opt_d);
+  }
+
+  # -s オプションが指定されていれば、
+  if ($opt_s) {
+    # -s オプションで指定されたファイルがなければ、異常終了。
+    unless (-f $opt_s) {
+      print STDERR "No such file : $opt_s\n";
+      exit 11;
+    }
+    # -s オプションで指定されたファイルを開いて、
+    my ($fh) = new FileHandle "< $opt_s";
+    unless (defined $fh) {
+      print STDERR "Cannot open : $opt_s\n";
+      exit 11;
+    }
+    else {
+      # 値を取得。
+      print "Use Style : $opt_s\n" if ($opt_d);
+      my (@values) =
+	map {
+	  my ($s) = $_;
+	  $s =~ s/\s+//g;
+	  $s =~ s/^(.*)$/\$$1\;/;
+	  $s =~ tr/[A-Z]/[a-z]/;
+	  $s
+	}
+        grep { /\=/ }
+        map { (split /\#/)[0] }
+        <$fh>;
+      undef $fh;
+      {
+	no strict 'subs';	# bare word error を防ぐ。
+	eval "@values";
+      }
+    }
+  }
+
+  # -o オプションが指定されていれば、
+  if (($opt_o) and ($opt_o != 1)) {
+    $outputfile = $opt_o;	# 指定されたファイルを、出力ファイルに。
+  }
+  # -o オプションが指定されていなければ、
+  else {
+    $outputfile = $ARGV[0];	# 入力ファイル名を、出力ファイル名に。
+  }
+
+  # -d オプションが指定されていれば、設定内容を表示。
+  if ($opt_d) {
+    print "Output File : $outputfile\n";
+    print "Input File : $ARGV[0]\n";
+    print "red = " . $red . "\n";
+    print "green = " . $green . "\n";
+    print "blue = " . $blue . "\n";
+    print "hcorner = " . $hcorner . "\n";
+    print "vcorner = " . $vcorner . "\n";
+    print "width = " . $width . "\n";
+    print "dottedlength = " . $dottedlength . "\n";
+    print "dottedspace = " . $dottedspace . "\n";
+    print "dotted = " . $dotted . "\n";
+  }
+}
+
+#
+# Exec() : 処理を実行
+#
+sub Exec {
+  my ($fin, $fout, $notalreadymkpdf, $newpdfmark);
+
+  # スタイルの設定
+  # 破線付きのスタイルなら、
+  if ($dotted eq "true") {
+    # 破線付きのスタイルを指定。
+    $newpdfmark = "\[$hcorner $vcorner $width \[$dottedlength $dottedspace\]\] \[$red $green $blue\]\]";
+  }
+  # 破線無しのスタイルなら、
+  else {
+    # 破線無しのスタイルを指定。
+    $newpdfmark = "\[$hcorner $vcorner $width\] \[$red $green $blue\]\]";
+  }
+
+  # 出力ファイルをバックアップ
+  unlink "$outputfile.bak" if (-f "$outputfile.bak");
+  rename "$outputfile", "$outputfile.bak" if (-f "$outputfile");
+  # 入力ファイルと出力ファイルが同じなら、
+  if ($outputfile eq $ARGV[0]) {
+    # バックアップしておいた出力ファイル(= 入力ファイル)を読み出しオープン。
+    $fin = new FileHandle "< $ARGV[0].bak";
+    unless (defined $fin) {
+      print STDERR "Cannot open : $ARGV[0].bak\n";
+      exit 11;
+    }
+  }
+  # 入力ファイルと出力ファイルが同じでなければ、
+  else {
+    # 第1引数の入力ファイルを読み出しオープン。
+    $fin = new FileHandle "< $ARGV[0]";
+    unless (defined $fin) {
+      print STDERR "Cannot open : $ARGV[0]\n";
+      exit 11;
+    }
+  }
+
+  # 出力ファイルを書き込みオープン。
+  $fout = new FileHandle "> $outputfile";
+  unless (defined $fout) {
+    print STDERR "Cannot write : $outputfile\n";
+    exit 11;
+  }
+  # MkPDFmark 実行フラグを未実行に。
+  $notalreadymkpdf = 1;
+  while (<$fin>) {
+    # 最初の BeginProcSet の前に MkPDFmark の出力を入れる。
+    if ((/^\%\%BeginProcSet/) && ($notalreadymkpdf)) {
+      print $fout &OutputMkPDFmark();
+      $notalreadymkpdf = 0;
+    }
+    # 指定されたスタイルで該当行を変換。
+    s!\) (\[\[[0-9]+ [0-9]+ [0-9]+ [0-9]+\]) \[[0-9] [0-9] [0-9] \[[0-9] [0-9]\]\] \[[0-9] [0-9] [0-9]\]\] pdfm!\) $1 $newpdfmark pdfm!;
+    s! (\[\[[0-9]+ [0-9]+ [0-9]+ [0-9]+\]) \[[0-9] [0-9] [0-9] \[[0-9] [0-9]\]\] \[[0-9] [0-9] [0-9]\]\] \((.+)\) pdfm! $1 $newpdfmark \($2\) pdfm!;
+    print $fout $_;
+  }
+
+  # ファイルクローズ。
+  undef $fin;
+  undef $fout;
+
+  # -n オプションが指定されていれば、出力ファイルのバックアップを削除。
+  unlink "$outputfile.bak" if ($opt_n);
+}
+
+# MkPDFmark の出力を得る
+sub OutputMkPDFmark {
+  my ($fin, @list);
+  # -t オプションが指定されていれば、しおりを付ける。
+  if ($opt_t) {
+    # 環境変数 CLASSPATH に、Java クラスファイルの検索パスを指定する必要がある。
+    $fin = new FileHandle "CLASSPATH=\"$MKPDFMARKCLASSDIR:%ENV{'CLASSPATH'}\"; export CLASSPATH; cat $opt_t $opt_i | $JAVA MkPDFmark -outcode EUC_JP |";
+  }
+  # -t オプションが指定されていなければ、しおりを付けずに、PDF情報のみ。
+  else {
+    # 環境変数 CLASSPATH に、Java クラスファイルの検索パスを指定する必要がある。
+    $fin = new FileHandle "CLASSPATH=\"$MKPDFMARKCLASSDIR:%ENV{'CLASSPATH'}\"; export CLASSPATH; cat $opt_i | $JAVA MkPDFmark -outcode EUC_JP |";
+  }
+  unless (defined $fin) {
+    print STDERR "Cannot exec : java MkPDFmark\n";
+    exit 11;
+  }
+  @list =
+    grep { $_ !~ /^\%\%BoundingBox\:/ }
+    <$fin>;
+  undef $fin;
+  return @list;
+}
+
+# 使用法を表示
+sub Usage {
+  my ($basename) = $0;
+  $basename =~ s!.*/!!;
+  print STDERR <<EOF;
+  usage : $basename -i PDFinfo [options] InputFile
+          $basename -h
+
+  options
+    -i PDFinfo    PDF の情報ファイル (必須)
+    -s PDFstyle   PDF のリンクのスタイル指定ファイル
+    -t siori.dat  PDF のしおりを指定するファイル
+    -o OutputFile 出力ファイル
+    -n            出力ファイルのバックアップを作らない
+    -d            デバッグモード (実行はしない)
+    -h            このヘルプを表示
+EOF
+}

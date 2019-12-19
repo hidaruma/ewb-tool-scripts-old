@@ -1,0 +1,283 @@
+#!/usr/bin/perl
+
+use strict;
+use vars qw($opt_1 $opt_c $opt_e $opt_h $opt_i $opt_l $opt_m $opt_n $opt_o $opt_p $opt_s); # options
+use vars qw($INITFILE $STYLEDIR $TRIGERDEF $TRIGERDIFF $CONTENTSFILE $INCTRIGER $PAGEREFTRIGER $NUMREFTRIGER $STRREFTRIGER); # consts
+use vars qw(%TRIGERLIST $REFLISTFILE); # global vars
+use Getopt::Std;
+use FileHandle;
+
+# consts
+$INITFILE = ".shelf2";
+$STYLEDIR = "Styles/";
+$TRIGERDEF = "triger.def";
+$TRIGERDEF = $STYLEDIR . $TRIGERDEF unless ( -f $TRIGERDEF );
+$TRIGERDIFF = "triger.diff";
+$TRIGERDIFF = $STYLEDIR . $TRIGERDIFF unless ( -f $TRIGERDIFF );
+$CONTENTSFILE = "contents.ewb";
+$INCTRIGER = "\/\/inc";
+$PAGEREFTRIGER = '\\\\pageref\[';
+$NUMREFTRIGER = '\\\\numref\[';
+$STRREFTRIGER = '\\\\strref\[';
+$REFLISTFILE = "reflist.ewb";
+
+exit(main());
+
+#-----------------------------------------------------------------
+# routines
+
+sub usage () {
+  my ($bname) = $0;
+
+  $bname =~ s/.*\///;
+
+  if ($ENV{"LANG"} =~ /^ja/) {
+    print <<__EOL__;
+  使用法: $bname [オプション] [ファイル名...]
+
+    $bname は、参照トリガの含まれる行を表示します。
+
+    オプション
+      -1         同じ参照につき最初に見つけた行だけを表示します。
+      -c         "$CONTENTSFILE"を含めて調べます。
+      -e <list>  ファイル<list>のファイルを調べません。リストは","で区切ります。
+      -i         "$INCTRIGER"を無視します。
+      -l         参照トリガのリストを表示します。-1と-nは無視されます。
+                     タブで区切って出現回数を表示します。
+      -m         "$TRIGERDEF"で"$NUMREFTRIGER"を使った参照だけを扱います。
+      -n         ファイル名、行数と共に表示します(grep -n のように)。
+      -o <file>  結果をEWBファイルに出力します。このファイル名を-eに追加します。
+                     ファイル名を指定しない場合は、"$REFLISTFILE"が使われます。
+      -p         "$TRIGERDEF"で"$PAGEREFTRIGER"を使った参照だけを扱います。
+      -s         "$TRIGERDEF"で"$STRREFTRIGER"を使った参照だけを扱います。
+      -h         このヘルプを表示します。
+
+    ファイル名を引数に指定しない場合は、"$INITFILE"にあるファイル名を使います。
+
+    注意: $bname は"$INCTRIGER"で読み込まれるファイルを、EWBファイルと考えます。
+__EOL__
+  }
+  else {
+    print <<__EOL__;
+  usage: $bname [options] [filenames...]
+
+    $bname prints lines containing reference triger.
+
+    options
+      -1         print lines only once per reference.
+      -c         include "$CONTENTSFILE".
+      -e <list>  exclude the file <list>. list must be delimited by ",".
+      -i         ignore "$INCTRIGER".
+      -l         print ref triger list. -1 ane -n are ignored.
+                     print the number of times after tab.
+      -n         print lines with filename and line number (like grep -n).
+      -m         print lines only including "$NUMREFTRIGER" in "$TRIGERDEF".
+      -o <file>  output EWB file.  this filename is added to -e.
+                     if the filename is omitted, "$REFLISTFILE" is used.
+      -p         print lines only including "$PAGEREFTRIGER" in "$TRIGERDEF".
+      -s         print lines only including "$STRREFTRIGER" in "$TRIGERDEF".
+      -h         print this message.
+
+    if the filenames are not given, use the names in "$INITFILE".
+
+    Note: $bname suppose the file included by "$INCTRIGER" is EWB file.
+__EOL__
+  }
+}
+
+sub openerror ($) {
+  my ($filename) = @_;
+  my ($msg);
+
+  if ($ENV{"LANG"} =~ /^ja/) {
+    $msg = "次のファイルを開けません : ";
+  }
+  else {
+    $msg = "cannot open : ";
+  }
+  print STDERR $msg . $filename . "\n";
+  exit 111;
+}
+
+sub printout ($) {
+  my ($str) = @_;
+  my ($fh);
+
+  if ($opt_o) {
+    $fh = new FileHandle ">>$opt_o";
+    print $fh $str;
+    undef $fh;
+  }
+  else {
+    print $str;
+  }
+}
+
+sub printref($$) {
+  my ($filename, $trigerreg) = @_;
+  my ($fh, $line, $printlineflag);
+
+  if ($opt_e) {
+    for (split(/,/, $opt_e)) {
+      return if ($filename eq $_);
+    }
+  }
+  unless ($opt_c) {
+    return if ($filename eq $CONTENTSFILE);
+  }
+
+  $fh = new FileHandle "$filename";
+  openerror($filename) unless (defined $fh);
+  while (<$fh>) {
+    unless ($opt_i) {
+      /$INCTRIGER (.*)\s*/ && do {
+        printref($1, $trigerreg) if (-f $1);
+        next;
+      };
+    }
+    $line = $_;
+    $printlineflag = 0;
+    while (/(\/\/($trigerreg)\{.*?\/\/\})/) {
+      ++$TRIGERLIST{$1};
+      if ($opt_1) {
+        ++$printlineflag if ($TRIGERLIST{$1} == 1);
+      }
+      else {
+        ++$printlineflag;
+      }
+      $_ = $';
+    }
+    unless ($opt_l) {
+      if ($opt_n) {
+        printout($filename . ":" . $. . ":" . $line) if ($printlineflag > 0);
+      }
+      else {
+        printout($line) if ($printlineflag > 0);
+      }
+    }
+  }
+  undef $fh;
+
+  return;
+}
+
+sub gettrigerreg($) {
+  my ($filename) = @_;
+  my ($fh, $return, @trigerdefs);
+
+  $fh = new FileHandle "$filename";
+  openerror($filename) unless (defined $fh);
+  if (($opt_m) or ($opt_p) or ($opt_s)) {
+    my ($regexp);
+    if ($opt_m) {
+      $regexp = $NUMREFTRIGER;
+    }
+    if ($opt_p) {
+      $regexp = $regexp . "|" if ($regexp);
+      $regexp = $regexp . $PAGEREFTRIGER;
+    }
+    if ($opt_s) {
+      $regexp = $regexp . "|" if ($regexp);
+      $regexp = $regexp . $STRREFTRIGER;
+    }
+    @trigerdefs =
+      map { (split /[ 	]+/)[1] }
+      grep { $_ =~ /$regexp/ }
+      grep { $_ =~ /^defref\W/ }
+      map { (split /\#/)[0] }
+      <$fh>;
+  }
+  else {
+    @trigerdefs =
+      map { (split /[ 	]+/)[1] }
+      grep { $_ =~ /^defref\W/ }
+      map { (split /\#/)[0] }
+      <$fh>;
+  }
+  undef $fh;
+
+  for (@trigerdefs) {
+    if ($return eq "") {
+      $return = $_;
+    }
+    else {
+      $return = $return . "|" . $_;
+    }
+  }
+  return $return;
+}
+
+sub main () {
+  my ($trigerreg);
+
+  # options
+  unless (getopts('1ce:hilnmops')) {
+    usage();
+    return 11;
+  }
+  if (($opt_h) or ($opt_e == 1)) {
+    usage();
+    return 0;
+  }
+  if ($opt_o) {
+    if ($opt_o == 1) {
+      $opt_o = $REFLISTFILE;
+    }
+    else {
+      $opt_o = $opt_o;
+    }
+    if ($opt_e) {
+      $opt_e = $opt_e . "," . $opt_o;
+    }
+    else {
+      $opt_e = $opt_o;
+    }
+    my ($backupfile);
+    $backupfile = $opt_o . ".bak";
+    unlink $backupfile if (-f $backupfile);
+    rename $opt_o, $backupfile;
+    printout("chapter 0\n\n");
+    printout("//i 参照リスト\n\n");
+  }
+
+  # get triger list with reg format
+  $trigerreg = gettrigerreg($TRIGERDEF);
+  if (-f $TRIGERDIFF) {
+    my ($difftrigers) = gettrigerreg($TRIGERDIFF);
+    if ($difftrigers ne "") {
+      $trigerreg = $trigerreg . "|" if ($trigerreg ne "");
+      $trigerreg = $trigerreg . $difftrigers;
+    }
+  }
+
+  # do with each files
+  @ARGV = grep { $_ ne "/dev/null" } @ARGV; # for grep on Emacs
+  if (@ARGV) {
+    for (@ARGV) {
+      printref($_, $trigerreg);
+    }
+  }
+  else {
+    my (@files, $fh);
+    $fh = new FileHandle "$INITFILE";
+    openerror($INITFILE) unless (defined $fh);
+    @files = 
+      map { (split / +/)[1] }
+      <$fh>;
+    undef $fh;
+    for (@files) {
+      /^---$/ && next;
+      printref($_, $trigerreg);
+    }
+  }
+
+  # print triger list
+  if ($opt_l) {
+    my ($key);
+    foreach $key (sort keys %TRIGERLIST) {
+      printout($key . "	" . $TRIGERLIST{$key} . "\n");
+    }
+  }
+
+  return 0;
+}

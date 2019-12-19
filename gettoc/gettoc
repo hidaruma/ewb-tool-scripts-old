@@ -1,0 +1,272 @@
+#!/usr/bin/perl
+#================================================================================
+#
+# gettoc : EWB のデータから目次ファイルを作る
+#
+#                                         (C) 2001 ASCII H.Togashi
+#
+#================================================================================
+
+use strict;
+use Getopt::Std;
+use FileHandle;
+use vars qw(
+	    $STYLEDIR
+	    $TOCFILE
+	    $TOCWORKFILE
+	    $SHELFFILE
+	    $TRIGERDEF
+	    $TRIGERDIFF
+	    @TRIGERLIST
+	    $opt_h
+	  );
+
+# init
+$STYLEDIR = "Styles/";
+$TOCFILE = "contents.ewb";
+$TOCWORKFILE = "contentsewb" . $$;
+$SHELFFILE = ".shelf2";
+$TRIGERDEF = "triger.def";
+$TRIGERDEF = $STYLEDIR . $TRIGERDEF unless ( -f $TRIGERDEF );
+$TRIGERDIFF = "triger.diff";
+$TRIGERDIFF = $STYLEDIR . $TRIGERDIFF unless ( -f $TRIGERDIFF );
+@TRIGERLIST = ();
+
+exit(main());
+
+#--------------------------------------------------------------------------------
+#
+# functions
+#
+
+#
+# メイン
+#
+sub main {
+
+  # オプションを取得し、ヘルプか不正なオプションだったら使用法を表示して終了。
+  if ( !(getopts('h')) or	# オプション解釈中にエラーになるか、
+       ($opt_h) ) {		# -h が指定されていれば、
+    Usage();			# 使用法を表示して、
+    exit 1;			# 異常終了。
+  }
+
+  # トリガー定義ファイルから必要なトリガのリストを得る。
+  @TRIGERLIST = GetTrigers($TRIGERDEF);
+  @TRIGERLIST = (@TRIGERLIST,GetTrigers($TRIGERDIFF)) if (-f $TRIGERDIFF);
+
+  # .shelf2 からファイル名のリストを得る。
+  my (@filenames) = GetFilenames();
+
+  # work ファイルと同名のファイルがあれば、そのバックアップを取る。
+  rename $TOCWORKFILE, "$TOCWORKFILE~" if (-f $TOCWORKFILE);
+  # .shelf2 にあるファイル名の順に、目次を作成する。
+  for (@filenames) {
+    # 索引なら、索引用の目次を作成。
+    if ( $_ eq "---" ) {
+      MakeMokujiIndexData();
+    }
+    # 索引でなければ、通常の目次作成。
+    else {
+      MakeMokujiData($_);
+    }
+  }
+  # contents.ewb のバックアップを取り、
+  rename $TOCFILE, "$TOCFILE~" if (-f $TOCFILE);
+  # work ファイルを contents.ewb に rename
+  rename $TOCWORKFILE, $TOCFILE;
+  # メッセージを表示して、
+  print "$TOCFILE が出来ました。必要に応じて編集してご利用ください。\n";
+  # 終了。
+  return 0;
+}
+
+# トリガー定義ファイルから必要なトリガのリストを得る。
+sub GetTrigers {
+  my ($filename) = @_;
+  my ($fh, @list);
+  unless (-f $filename) {
+    print STDERR "Cannot find : $filename.\n";
+    exit 11;
+  }
+  # トリガー定義ファイルをオープンし、
+  $fh = new FileHandle "< $filename";
+  # オープンできなければ、異常終了。
+  unless (defined $fh) {
+    print STDERR "Cannot open : $filename\n";
+    exit 11;
+  }
+  # 必要なトリガのリストを作成し、
+  @list =
+    map { (split /\s+/)[1] }
+    grep { /^\s*defgothic\s+TOC/ }
+    grep { /\S+/ }
+    map { (split /\#/)[0] }
+    <$fh>;
+  # トリガー定義ファイルを閉じて、
+  undef $fh;
+  # リストを返す。
+  return @list;
+}
+
+#
+# GetFilenames() : .shelf2 からファイル名のリストを取得する
+#
+sub GetFilenames {
+  my ($fh, @list);
+  # .shelf2 がなければ、異常終了。
+  unless (-f $SHELFFILE) {
+    print STDERR "Cannot find : $SHELFFILE.\n";
+    exit 11;
+  }
+  # .shelf2 をオープンし、
+  $fh = new FileHandle "< $SHELFFILE";
+  # オープンできなければ、異常終了。
+  unless (defined $fh) {
+    print STDERR "Cannot open : $SHELFFILE\n";
+    exit 11;
+  }
+  # ファイル名のリストを作成し、
+  @list =
+    grep { /\S+/ }
+    map { (split /\s+/)[1] }
+    map { (split /\#/)[0] }
+    <$fh>;
+  # .shelf2 を閉じて、
+  undef $fh;
+  # リストを返す。
+  return @list;
+}
+
+#
+# MakeMokujiData(filename) : 目次データファイルを作成
+#
+sub MakeMokujiData() {
+  my ($filename) = @_;
+  my ($fh, @list, $label, %secnum);
+
+  # 必要なファイル名を作成。
+  my ($basename) = $filename;
+  $basename =~ s/\..+$// ;
+  my ($rogfilename) = "Work/$basename.rog";
+  my ($secfilename) = "Work/$basename.sec";
+
+  # .shelf2 で指定されたファイルガなければ、異常終了。
+  unless (-f $filename) {
+    print STDERR "Cannot find : $filename.\n";
+    exit 11;
+  }
+  
+  # .rog ファイルをオープン。
+  $fh = new FileHandle "< $rogfilename";
+  unless (defined $fh) {
+    print STDERR "Cannot open : $rogfilename.\n";
+    exit 11;
+  }
+  # 章立てのラベルのある行だけをリストに取得。
+  @list =
+    grep { $_ !~ /^ / }
+    <$fh>;
+  # .rog ファイルをクローズ。
+  undef $fh;
+
+  # .rog ファイルの記述から、必要な情報を取り出す。
+  for (@list) {
+    # 章タイプ ラベル名 num="章番号" 章見出し文字列 ページ番号
+    /^([^ ]+) +([^ ]+) +num=\"(.*?)\" (.*) ([0-9]+)/;
+    $label = $2;
+    $secnum{$label} = $3;
+  }
+
+  # .sec ファイルを、オープン。
+  $fh = new FileHandle "< $secfilename";
+  unless (defined $fh) {
+    print STDERR "Cannot open : $secfilename.\n";
+    exit 11;
+  }
+  # 空行以外をリストに取得。
+  @list =
+    grep { /\S+/ }
+    <$fh>;
+  # .sec ファイルを、クローズ。
+  undef $fh;
+
+  # work ファイルを、追加書き込みオープン。
+  $fh = new FileHandle ">> $TOCWORKFILE";
+  unless (defined $fh) {
+    print STDERR "Cannot write : $TOCWORKFILE\n";
+    exit 11;
+  }
+  # .rog ファイルの情報と、.sec ファイルの見出し文字列で、
+  # 目次情報を書き込む。
+  for (@list) {
+    /^(\S+?)\s+(\S+?)\s+(.*)$/ && do {
+      OutputMokuji($fh, $1, $2, $3, $secnum{$2});
+    };
+  }
+  # contents.ewb を、クローズ。
+  undef $fh;
+}
+
+#
+# MakeMokujiIndexData() : 索引用の目次データファイルを作成
+#
+sub MakeMokujiIndexData {
+  # work ファイルを、追加書き込みオープン。
+  my ($fh) = new FileHandle ">> $TOCWORKFILE";
+  unless (defined $fh) {
+    print STDERR "Cannot write : $TOCWORKFILE\n";
+    exit 11;
+  }
+  # 目次情報を書き込む。
+  # ページ番号に .rog ファイルから取得したものを使う他は、 決め打ち。
+  OutputMokuji($fh, "IDXchapter", "index0001", "索引", "");
+  # contents.ewb を、クローズ。
+  undef $fh;
+}
+
+#
+# OutputMokuji($fh, $sectype, $label, $secstr, $secnum)
+#                 : 指定のフォーマットで書き込む。
+#
+sub OutputMokuji {
+  my ($fh, $sectype, $label, $secstr, $secnum) = @_;
+  return if (! grep(/^TOC$sectype$/,@TRIGERLIST));
+  print $fh "//comment\n" if ( $sectype =~ /(chapter)|(part)/i );
+  if ($secnum =~ /\\/) {
+    print $fh
+      "  //TOC$sectype\{//LaTeX\{$secnum//\}//\}",
+      "//TOCSTR$sectype\{$secstr//\}",
+      "//TOCPAGE$sectype\{$label//\}\n";
+  }
+  else {
+    print $fh
+      "  //TOC$sectype\{$secnum//\}",
+      "//TOCSTR$sectype\{$secstr//\}",
+      "//TOCPAGE$sectype\{$label//\}\n";
+  }
+}
+
+#
+# 使用法の表示
+#
+sub Usage {
+  my ($basename) = $0;
+  $basename =~ s!.*/!!;
+  print STDERR <<EOF;
+
+  usage : $basename [option]
+        option
+            --h              Print this message.
+
+   ある程度原稿が固まり、少なくとも1度は全部の原稿を回した段階で、EWB の
+   ディレクトリで、$basename と実行します。\"$TOCFILE\"というファイルがそ
+   のディレクトリにすぐに出来ます。
+
+   \"$TOCFILE\"というファイルは、目次原稿ファイルです。原稿のお好きな
+   箇所に読み込むなり、bookで登録するなりして、使ってください。すべての
+   レベルの目次が入っていますので、あまり深いところなどのいらない部分は
+   適宜判断して削るなどの編集を行ってください。
+
+EOF
+}
